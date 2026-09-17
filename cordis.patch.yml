@@ -1,0 +1,8 @@
+# 飞书工作区与群聊双向协同桥接插件
+- insert:
+    - id: feishu-workspace-bridge
+      name: 'dsh-plugin-feishu-workspace'
+      inject: [tools]
+      config:
+        projectRoot: !!js process.env.DSH_PROJECT_ROOT || process.cwd()
+        databasePath: !!js process.env.DSH_DATABASE_PATH || ''

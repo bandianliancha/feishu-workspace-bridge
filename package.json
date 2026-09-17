@@ -1,0 +1,65 @@
+{
+  "name": "dsh-plugin-feishu-workspace",
+  "version": "0.1.0",
+  "description": "Feishu (Lark) Workspace & Bot Agent bridge plugin for DeepSeek Harness: bind workspaces to Feishu groups, auto-mention bot agents, with strict silent switch control.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "client.js",
+    "store.mjs",
+    "tools.mjs",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "feishu",
+    "lark",
+    "bot",
+    "agent",
+    "collaboration"
+  ],
+  "author": "bandianliancha",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bandianliancha/feishu-workspace-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bandianliancha/feishu-workspace-bridge/issues"
+  },
+  "homepage": "https://github.com/bandianliancha/feishu-workspace-bridge#readme",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.7 || ^0.1.2-alpha.1"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.60.0",
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
