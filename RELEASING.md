@@ -11,7 +11,7 @@ Pushing the tag runs `.github/workflows/release.yml`. The workflow repeats the c
 
 ## npm publication
 
-The package name `dsh-plugin-feishu-workspace` is reserved in `package.json`, but npm publishing requires a maintainer account:
+The package is published as `dsh-plugin-feishu-workspace`. Publishing a new version requires a maintainer account with 2FA enabled:
 
 ```bash
 npm login

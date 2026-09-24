@@ -45,6 +45,12 @@ sequenceDiagram
 ## 安装
 
 ```bash
+dsh plugin --profile web add dsh-plugin-feishu-workspace
+```
+
+也可以直接从 GitHub 主分支安装开发版本：
+
+```bash
 dsh plugin --profile web add github:bandianliancha/feishu-workspace-bridge
 ```
 
