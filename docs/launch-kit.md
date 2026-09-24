@@ -27,12 +27,16 @@ Install from npm with `dsh plugin --profile web add dsh-plugin-feishu-workspace`
 **Title**
 
 ```text
-Feishu Workspace Bridge — continue DSH workspace tasks from Feishu
+DSH | Feishu Workspace Bridge | Continue workspace tasks from Feishu
 ```
 
 **Body**
 
 ````markdown
+> **Unofficial project, independently developed and maintained by a community member.**
+
+**Project URL:** https://github.com/bandianliancha/feishu-workspace-bridge
+
 I built **Feishu Workspace Bridge**, an open-source DSH plugin that maps each workspace to one private Feishu group and synchronizes messages in both directions.
 
 ![Demo](https://raw.githubusercontent.com/bandianliancha/feishu-workspace-bridge/main/assets/demo.gif)
@@ -53,8 +57,6 @@ Install:
 ```bash
 dsh plugin --profile web add dsh-plugin-feishu-workspace
 ```
-
-Repository: https://github.com/bandianliancha/feishu-workspace-bridge
 
 npm: https://www.npmjs.com/package/dsh-plugin-feishu-workspace
 
