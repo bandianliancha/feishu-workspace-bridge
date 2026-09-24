@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-feishu-workspace",
-  "version": "0.1.0",
-  "description": "Feishu (Lark) Workspace & Bot Agent bridge plugin for DeepSeek Harness: bind workspaces to Feishu groups, auto-mention bot agents, with strict silent switch control.",
+  "version": "0.2.0",
+  "description": "One private Feishu group per DSH workspace with real-time two-way message synchronization.",
   "type": "module",
   "main": "index.mjs",
   "exports": {
@@ -15,9 +15,12 @@
     "client.js",
     "store.mjs",
     "tools.mjs",
+    "bridge.mjs",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md"
   ],
   "keywords": [
     "deepseek-harness",
@@ -56,10 +59,14 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.60.0",
-    "better-sqlite3": "^13.0.3"
+    "better-sqlite3": "^12.4.1"
   },
   "devDependencies": {},
+  "scripts": {
+    "test": "node test-bind-bot.mjs && node test-lazy-sync.mjs && node test-session-forwarder.mjs && node test-workspace-member.mjs && node test-store-security.mjs",
+    "check": "node --check index.mjs && node --check bridge.mjs && node --check store.mjs && node --check tools.mjs && npm test"
+  },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }

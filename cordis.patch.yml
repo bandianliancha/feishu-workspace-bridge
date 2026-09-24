@@ -2,7 +2,6 @@
 - insert:
     - id: feishu-workspace-bridge
       name: 'dsh-plugin-feishu-workspace'
-      inject: [tools]
+      inject: [tools, webServer, sessionController]
       config:
-        projectRoot: !!js process.env.DSH_PROJECT_ROOT || process.cwd()
-        databasePath: !!js process.env.DSH_DATABASE_PATH || ''
+        databasePath: !!js process.env.FEISHU_WORKSPACE_BRIDGE_DB || ''
