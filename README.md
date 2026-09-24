@@ -1,9 +1,17 @@
 # Feishu Workspace Bridge
 
 [![CI](https://github.com/bandianliancha/feishu-workspace-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/bandianliancha/feishu-workspace-bridge/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-plugin-feishu-workspace.svg)](https://www.npmjs.com/package/dsh-plugin-feishu-workspace)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-plugin-feishu-workspace.svg)](https://www.npmjs.com/package/dsh-plugin-feishu-workspace)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 把 DSH 工作区与飞书群一一对应，并在 DSH 会话和飞书群之间实时双向同步消息。
+
+[English](https://github.com/bandianliancha/feishu-workspace-bridge/blob/main/README_EN.md) · [npm](https://www.npmjs.com/package/dsh-plugin-feishu-workspace) · [Releases](https://github.com/bandianliancha/feishu-workspace-bridge/releases)
+
+![Feishu Workspace Bridge 演示](https://raw.githubusercontent.com/bandianliancha/feishu-workspace-bridge/main/assets/demo.gif)
+
+离开电脑后，直接在飞书群里继续推进 DSH 工作区任务。无需公网回调地址，也不会读取历史消息。
 
 插件只做三件事：
 
@@ -41,6 +49,18 @@ sequenceDiagram
 - Node.js 20 或更高版本
 - DeepSeek Harness（DSH）
 - 飞书企业自建应用，并启用机器人能力
+
+## 兼容性
+
+| 项目 | 已验证范围 |
+|---|---|
+| DSH | `0.1.7-alpha.1` 实机双向收发与生命周期验证 |
+| Node.js | `20`、`22`、`24` 持续集成测试 |
+| macOS | 实机运行；App Secret 使用系统钥匙串 |
+| Linux | Ubuntu CI 全量测试；App Secret 使用 `0600` 本机凭证文件 |
+| 飞书 | 企业自建应用、机器人、长连接事件订阅 |
+
+DSH 当前仍处于开发者预览阶段。上游接口出现兼容性变化时，请提交 [Issue](https://github.com/bandianliancha/feishu-workspace-bridge/issues) 并附上 DSH 版本和诊断页错误信息。
 
 ## 安装
 
