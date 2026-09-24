@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { FeishuBridgeStore } from "./store.mjs";
 import { FeishuWorkspaceBridge } from "./bridge.mjs";
+import { FeishuSecretStore } from "./secret-store.mjs";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bridge-bind-"));
 const store = new FeishuBridgeStore(path.join(root, "bridge.sqlite"));
@@ -23,7 +24,8 @@ const fetchFn = async (url) => {
       : { code: 0, data: {} };
   return { ok: true, status: 200, json: async () => data };
 };
-const bridge = new FeishuWorkspaceBridge({ store, dshHome: root, projectRoot: root, fetchFn });
+const secretStore = new FeishuSecretStore({ dshHome: root, platform: "linux" });
+const bridge = new FeishuWorkspaceBridge({ store, dshHome: root, projectRoot: root, fetchFn, secretStore });
 bridge.startListening = async () => {};
 
 try {
@@ -60,12 +62,15 @@ try {
   assert.equal(result.checks.length, 3);
   assert.equal((await store.getBinding("default")).appId, "cli_test");
   assert.equal((await store.getBinding("default")).grantOpenId, "ou_operator");
+  assert.equal("appSecret" in (await store.getBinding("default")), false);
+  assert.equal(secretStore.get("cli_test"), "secret");
   assert.equal(await bridge.grantOpenId(), "ou_operator");
   const reusedSecret = await bridge.bindBot({ appId: "cli_test", appSecret: "", grantOpenId: "ou_operator" });
   assert.equal(reusedSecret.connected, true, "an existing secret can be reused during permission revalidation");
   const malformedBridge = new FeishuWorkspaceBridge({
     store,
     dshHome: root,
+    secretStore,
     fetchFn: async () => ({ ok: false, status: 502, text: async () => "not-json" })
   });
   await assert.rejects(

@@ -4,10 +4,12 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { EventDispatcher, WSClient } from "@larksuiteoapi/node-sdk";
 import { publicBinding } from "./store.mjs";
+import { FeishuSecretStore } from "./secret-store.mjs";
 
 const API = "https://open.feishu.cn/open-apis";
 const MARKDOWN_CHUNK_SIZE = 4000;
 const TEXT_CHUNK_SIZE = 10000;
+const RETRY_INTERVAL_MS = 5000;
 
 class FeishuApiError extends Error {
   constructor(message, { code = 0, status = 0 } = {}) {
@@ -166,11 +168,12 @@ function isChatNotFound(error) {
 }
 
 export class FeishuWorkspaceBridge {
-  constructor({ store, dshHome, fetchFn = fetch, forwardMessage }) {
+  constructor({ store, dshHome, fetchFn = fetch, forwardMessage, secretStore }) {
     this.store = store;
     this.dshHome = dshHome;
     this.fetchFn = fetchFn;
     this.forwardMessage = forwardMessage;
+    this.secretStore = secretStore || new FeishuSecretStore({ dshHome });
     this.wsClient = null;
     this.wsCredentialKey = "";
     this.wsStarting = null;
@@ -179,6 +182,23 @@ export class FeishuWorkspaceBridge {
     this.syncing = new Map();
     this.needsExistingGroupReconcile = true;
     this.tokenCache = new Map();
+    this.deliveryInFlight = new Set();
+    this.retryTimer = null;
+    this.lastPruneAt = Date.now();
+    this.health = {
+      wsStatus: "disconnected",
+      connectedAt: "",
+      lastEventAt: "",
+      lastInboundAt: "",
+      lastOutboundAt: "",
+      lastError: "",
+      lastErrorAt: ""
+    };
+  }
+
+  #recordError(error) {
+    this.health.lastError = String(error?.message || error || "未知错误").slice(0, 1000);
+    this.health.lastErrorAt = new Date().toISOString();
   }
 
   #workspaceSnapshot(workspace) {
@@ -193,9 +213,15 @@ export class FeishuWorkspaceBridge {
 
   async credentials() {
     const binding = await this.store.getBinding("default");
+    const appId = binding?.appId || process.env.FEISHU_APP_ID || "";
+    const legacySecret = this.store.getLegacyAppSecret();
+    if (appId && legacySecret) {
+      this.secretStore.set(appId, legacySecret);
+      await this.store.clearLegacyAppSecret();
+    }
     return {
-      appId: binding?.appId || process.env.FEISHU_APP_ID || "",
-      appSecret: binding?.appSecret || process.env.FEISHU_APP_SECRET || ""
+      appId,
+      appSecret: process.env.FEISHU_APP_SECRET || this.secretStore.get(appId) || legacySecret || ""
     };
   }
 
@@ -286,23 +312,26 @@ export class FeishuWorkspaceBridge {
   async bindBot({ appId, appSecret, grantOpenId }) {
     const existing = await this.store.getBinding("default");
     const normalizedAppId = String(appId || existing?.appId || "").trim();
-    const normalizedSecret = String(appSecret || (normalizedAppId === existing?.appId ? existing?.appSecret : "") || "").trim();
+    const savedSecret = normalizedAppId === existing?.appId ? this.secretStore.get(normalizedAppId) || this.store.getLegacyAppSecret() : "";
+    const normalizedSecret = String(appSecret || savedSecret || "").trim();
     const normalizedOpenId = String(grantOpenId || existing?.grantOpenId || "").trim();
     if (!normalizedAppId || !normalizedSecret || !normalizedOpenId) throw new Error("请填写 App ID、App Secret 和你的 Open ID");
     if (!/^cli_[A-Za-z0-9]+$/.test(normalizedAppId)) throw new Error("App ID 格式不正确，应为 cli_ 开头");
     if (!/^ou_[A-Za-z0-9]+$/.test(normalizedOpenId)) throw new Error("Open ID 格式不正确，应为 ou_ 开头");
     const credentials = { appId: normalizedAppId, appSecret: normalizedSecret };
     const checks = await this.verifyBotPermissions(credentials);
+    const secretStorage = this.secretStore.set(normalizedAppId, normalizedSecret);
     await this.startListening(credentials);
     await this.store.setBinding({
       workspaceId: "default",
       appId: normalizedAppId,
-      appSecret: normalizedSecret,
-      grantOpenId: normalizedOpenId
+      grantOpenId: normalizedOpenId,
+      secretStored: true
     });
+    await this.store.clearLegacyAppSecret();
     this.needsExistingGroupReconcile = true;
     await this.syncChangedWorkspaces();
-    return { appId: normalizedAppId, connected: true, memberBindingReady: true, checks, warning: "" };
+    return { appId: normalizedAppId, connected: true, memberBindingReady: true, checks, warning: "", secretStorage: secretStorage.backend };
   }
 
   async syncWorkspace(workspaceId, { createIfMissing = true } = {}) {
@@ -464,33 +493,26 @@ export class FeishuWorkspaceBridge {
     const sessionId = workspace?.sessionIds.at(-1) || binding?.sessionId;
     if (!sessionId) throw new Error(`工作区 ${workspaceId} 没有可用 DSH 会话`);
     const text = extractIncomingText(message).replace(/@_user_\d+/g, "").trim();
-    if (!text || !this.store.markMessage(message.message_id, workspaceId, "in")) return;
-    try {
-      if (!this.forwardMessage) throw new Error("DSH 会话投递服务未配置");
-      const result = await this.forwardMessage(sessionId, text, message.message_id);
-      if (result?.accepted !== true) throw new Error("DSH 未确认接收飞书消息");
-      try {
-        const credentials = await this.credentials();
-        await this.#request(`/im/v1/messages/${encodeURIComponent(message.message_id)}/reactions`, {
-          method: "POST",
-          body: { reaction_type: { emoji_type: "OK" } },
-          credentials
-        });
-      } catch (error) {
-        console.warn(`[feishu-workspace-bridge] 消息 ${message.message_id} 已进入 DSH，但表情回应失败:`, error.message);
-      }
-      console.info(`[feishu-workspace-bridge] 已投递 ${message.message_id} → ${sessionId}`);
-    } catch (error) {
-      this.store.deleteMessage(message.message_id);
-      throw error;
-    }
+    if (!text) return;
+    this.health.lastEventAt = new Date().toISOString();
+    const queued = this.store.enqueueDelivery({
+      messageId: message.message_id,
+      workspaceId,
+      direction: "in",
+      payload: { sessionId, text, chatId: message.chat_id }
+    });
+    if (!queued.created && queued.delivery?.status === "delivered") return;
+    if (!queued.created && queued.delivery?.nextRetryAt && queued.delivery.nextRetryAt > new Date().toISOString()) return;
+    await this.deliverMessage(message.message_id);
   }
 
-  async #sendToChat(chatId, text, credentials) {
-    for (const payload of buildFeishuMessagePayloads(text)) {
-      await this.#request("/im/v1/messages?receive_id_type=chat_id", {
+  async #sendToChat(chatId, text, credentials, deliveryId) {
+    const payloads = buildFeishuMessagePayloads(text);
+    for (let index = 0; index < payloads.length; index += 1) {
+      const uuid = createHash("sha256").update(`${deliveryId}:${index}`).digest("hex");
+      await this.#request(`/im/v1/messages?receive_id_type=chat_id&uuid=${uuid}`, {
         method: "POST",
-        body: { receive_id: chatId, ...payload },
+        body: { receive_id: chatId, ...payloads[index] },
         credentials
       });
     }
@@ -504,26 +526,129 @@ export class FeishuWorkspaceBridge {
     const assistant = [...(session.log || [])].reverse().find((item) => item?.type === "assistant/message");
     const text = assistant?.data?.message?.content?.filter((content) => content?.type === "text").map((content) => content.text).join("\n\n").trim();
     if (!text) return;
-    await this.syncWorkspace(workspace.workspaceId);
-    let binding = await this.store.getBinding(workspace.workspaceId);
-    if (!binding?.chatId || binding.enabled === false) return;
     const key = createHash("sha256").update(`${sessionId}:${assistant.seq || ""}:${text}`).digest("hex");
-    if (!this.store.markMessage(key, workspace.workspaceId, "out")) return;
+    const queued = this.store.enqueueDelivery({
+      messageId: key,
+      workspaceId: workspace.workspaceId,
+      direction: "out",
+      payload: { sessionId, text }
+    });
+    if (!queued.created && queued.delivery?.status === "delivered") return;
+    await this.deliverMessage(key);
+  }
+
+  #retryAt(attempts) {
+    const delay = Math.min(15 * 60_000, 5000 * (2 ** Math.min(8, Math.max(0, attempts - 1))));
+    return new Date(Date.now() + delay).toISOString();
+  }
+
+  async deliverMessage(messageId) {
+    if (this.closed || this.deliveryInFlight.has(messageId)) return;
+    const initial = this.store.getDelivery(messageId);
+    if (!initial || initial.status === "delivered") return initial;
+    this.deliveryInFlight.add(messageId);
+    const delivery = this.store.markDeliveryAttempt(messageId);
     try {
-      const credentials = await this.credentials();
-      try {
-        await this.#sendToChat(binding.chatId, text, credentials);
-      } catch (error) {
-        if (!isChatNotFound(error)) throw error;
-        await this.store.deleteBinding(workspace.workspaceId, { deleteMessages: false });
-        await this.syncWorkspace(workspace.workspaceId);
-        binding = await this.store.getBinding(workspace.workspaceId);
-        await this.#sendToChat(binding.chatId, text, credentials);
+      let warning = "";
+      if (delivery.direction === "in") {
+        const workspace = this.workspaces().find((item) => item.workspaceId === delivery.workspaceId);
+        const binding = await this.store.getBinding(delivery.workspaceId);
+        const sessionId = workspace?.sessionIds.at(-1) || delivery.payload.sessionId || binding?.sessionId;
+        if (!workspace || !sessionId) throw new Error(`工作区 ${delivery.workspaceId} 没有可用 DSH 会话`);
+        if (!this.forwardMessage) throw new Error("DSH 会话投递服务未配置");
+        const result = await this.forwardMessage(sessionId, delivery.payload.text, messageId);
+        if (result?.accepted !== true) throw new Error("DSH 未确认接收飞书消息");
+        try {
+          const credentials = await this.credentials();
+          await this.#request(`/im/v1/messages/${encodeURIComponent(messageId)}/reactions`, {
+            method: "POST",
+            body: { reaction_type: { emoji_type: "OK" } },
+            credentials
+          });
+        } catch (error) {
+          warning = `消息已进入 DSH，但表情回应失败：${error.message}`;
+          console.warn(`[feishu-workspace-bridge] 消息 ${messageId} 已进入 DSH，但表情回应失败:`, error.message);
+        }
+        this.health.lastInboundAt = new Date().toISOString();
+        console.info(`[feishu-workspace-bridge] 已投递 ${messageId} → ${sessionId}`);
+      } else if (delivery.direction === "out") {
+        await this.syncWorkspace(delivery.workspaceId);
+        let binding = await this.store.getBinding(delivery.workspaceId);
+        if (!binding?.chatId || binding.enabled === false) throw new Error(`工作区 ${delivery.workspaceId} 没有可用飞书群`);
+        const credentials = await this.credentials();
+        try {
+          await this.#sendToChat(binding.chatId, delivery.payload.text, credentials, messageId);
+        } catch (error) {
+          if (!isChatNotFound(error)) throw error;
+          await this.store.deleteBinding(delivery.workspaceId, { deleteMessages: false });
+          await this.syncWorkspace(delivery.workspaceId);
+          binding = await this.store.getBinding(delivery.workspaceId);
+          await this.#sendToChat(binding.chatId, delivery.payload.text, credentials, messageId);
+        }
+        this.health.lastOutboundAt = new Date().toISOString();
+      } else {
+        throw new Error(`未知投递方向：${delivery.direction}`);
       }
+      return this.store.markDeliveryDelivered(messageId, { warning });
     } catch (error) {
-      this.store.deleteMessage(key);
+      this.#recordError(error);
+      this.store.markDeliveryFailed(messageId, error, this.#retryAt(delivery.attempts));
       throw error;
+    } finally {
+      this.deliveryInFlight.delete(messageId);
     }
+  }
+
+  async retryPendingDeliveries({ force = false } = {}) {
+    if (this.closed) return;
+    if (Date.now() - this.lastPruneAt >= 24 * 60 * 60 * 1000) {
+      this.store.pruneMessages();
+      this.lastPruneAt = Date.now();
+    }
+    const pending = force ? this.store.listPendingDeliveries() : this.store.listRetryableDeliveries();
+    for (const delivery of pending) {
+      try { await this.deliverMessage(delivery.messageId); } catch (error) {
+        console.warn(`[feishu-workspace-bridge] 消息 ${delivery.messageId} 重试失败:`, error.message);
+      }
+    }
+  }
+
+  startRetryLoop() {
+    if (this.retryTimer || this.closed) return;
+    this.retryPendingDeliveries().catch((error) => this.#recordError(error));
+    this.retryTimer = setInterval(() => this.retryPendingDeliveries().catch((error) => this.#recordError(error)), RETRY_INTERVAL_MS);
+    this.retryTimer.unref?.();
+  }
+
+  async diagnostics({ verify = false } = {}) {
+    const credentials = await this.credentials();
+    let checks = [];
+    let verificationError = "";
+    if (verify && credentials.appId && credentials.appSecret) {
+      try { checks = await this.verifyBotPermissions(credentials); } catch (error) {
+        verificationError = error.message;
+        this.#recordError(error);
+      }
+    }
+    const bindings = await this.store.listWorkspaceBindings();
+    const recent = this.store.listRecentDeliveries(20).map(({ messageId: _messageId, ...item }) => item);
+    return {
+      configured: Boolean(credentials.appId && credentials.appSecret),
+      appId: credentials.appId,
+      secretStorage: process.env.FEISHU_APP_SECRET ? "environment" : (credentials.appId ? this.secretStore.backend(credentials.appId) : "none"),
+      connection: { ...this.health },
+      bindings: {
+        total: bindings.length,
+        active: bindings.filter((item) => item.enabled !== false && item.chatId).length,
+        items: bindings.map((item) => ({ workspaceId: item.workspaceId, chatName: item.chatName || "", enabled: item.enabled !== false }))
+      },
+      deliveries: {
+        stats: this.store.deliveryStats(),
+        recent
+      },
+      checks,
+      verificationError
+    };
   }
 
   async startListening(credentialsOverride = null) {
@@ -532,25 +657,41 @@ export class FeishuWorkspaceBridge {
     if (!credentials.appId || !credentials.appSecret) return;
     const key = credentialKey(credentials);
     if (this.wsClient && this.wsCredentialKey === key) return;
-    if (this.wsStarting) return this.wsStarting;
+    if (this.wsStarting) {
+      await this.wsStarting;
+      return this.startListening(credentials);
+    }
+    this.health.wsStatus = "connecting";
     this.wsStarting = (async () => {
       const dispatcher = new EventDispatcher({}).register({
-        "im.message.receive_v1": (data) => this.handleIncoming(data).catch((error) =>
-          console.warn("[feishu-workspace-bridge] 群消息处理失败:", error.message))
+        "im.message.receive_v1": (data) => {
+          this.health.lastEventAt = new Date().toISOString();
+          return this.handleIncoming(data).catch((error) =>
+            console.warn("[feishu-workspace-bridge] 群消息处理失败，已安排重试:", error.message));
+        }
       });
       const nextClient = new WSClient({ appId: credentials.appId, appSecret: credentials.appSecret, autoReconnect: true });
       await nextClient.start({ eventDispatcher: dispatcher });
       const previousClient = this.wsClient;
       this.wsClient = nextClient;
       this.wsCredentialKey = key;
+      this.health.wsStatus = "connected";
+      this.health.connectedAt = new Date().toISOString();
       previousClient?.close({ force: true });
-    })().finally(() => { this.wsStarting = null; });
+    })().catch((error) => {
+      this.health.wsStatus = "error";
+      this.#recordError(error);
+      throw error;
+    }).finally(() => { this.wsStarting = null; });
     return this.wsStarting;
   }
 
   close() {
     this.closed = true;
+    if (this.retryTimer) clearInterval(this.retryTimer);
+    this.retryTimer = null;
     this.wsClient?.close({ force: true });
     this.wsClient = null;
+    this.health.wsStatus = "disconnected";
   }
 }

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { FeishuBridgeStore } from "./store.mjs";
 import { FeishuWorkspaceBridge } from "./bridge.mjs";
+import { FeishuSecretStore } from "./secret-store.mjs";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bridge-lazy-"));
 fs.mkdirSync(path.join(root, "storages"), { recursive: true });
@@ -12,7 +13,9 @@ fs.writeFileSync(workspaceFile, JSON.stringify({
   tables: { workspaces: { workspace1: { title: "工作区", sessionIds: ["session1"] } } }
 }));
 const store = new FeishuBridgeStore(path.join(root, "bridge.sqlite"));
-await store.setBinding({ workspaceId: "default", appId: "cli_test", appSecret: "secret", grantOpenId: "ou_operator" });
+const secretStore = new FeishuSecretStore({ dshHome: root, platform: "linux" });
+secretStore.set("cli_test", "secret");
+await store.setBinding({ workspaceId: "default", appId: "cli_test", secretStored: true, grantOpenId: "ou_operator" });
 const requests = [];
 const forwarded = [];
 const fetchFn = async (url, options = {}) => {
@@ -26,7 +29,7 @@ const fetchFn = async (url, options = {}) => {
         : { code: 0, data: {} };
   return { ok: true, status: 200, json: async () => data };
 };
-const bridge = new FeishuWorkspaceBridge({ store, dshHome: root, projectRoot: root, fetchFn, forwardMessage: async (sessionId, text) => { forwarded.push({ sessionId, text }); return { accepted: true }; } });
+const bridge = new FeishuWorkspaceBridge({ store, dshHome: root, projectRoot: root, fetchFn, secretStore, forwardMessage: async (sessionId, text) => { forwarded.push({ sessionId, text }); return { accepted: true }; } });
 
 try {
   await bridge.syncChangedWorkspaces();
@@ -66,8 +69,8 @@ try {
   assert.ok(requests.some((request) => request.method === "DELETE" && request.url.endsWith("/im/v1/chats/oc_workspace")), "deleting a workspace must dissolve its bound Feishu group");
   assert.equal(await store.getBinding("workspace1"), null, "deleting a workspace must remove its local binding");
 
-  await store.setBinding({ workspaceId: "stale-workspace", chatId: "oc_stale", appId: "cli_test", appSecret: "secret", enabled: true });
-  const restartedBridge = new FeishuWorkspaceBridge({ store, dshHome: root, projectRoot: root, fetchFn });
+  await store.setBinding({ workspaceId: "stale-workspace", chatId: "oc_stale", enabled: true });
+  const restartedBridge = new FeishuWorkspaceBridge({ store, dshHome: root, projectRoot: root, fetchFn, secretStore });
   await restartedBridge.syncChangedWorkspaces();
   assert.ok(requests.some((request) => request.method === "DELETE" && request.url.endsWith("/im/v1/chats/oc_stale")), "startup reconciliation must dissolve groups for workspaces deleted before restart");
   assert.equal(await store.getBinding("stale-workspace"), null, "startup reconciliation must remove stale bindings");

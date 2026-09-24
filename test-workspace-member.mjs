@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { FeishuBridgeStore } from "./store.mjs";
 import { FeishuWorkspaceBridge } from "./bridge.mjs";
+import { FeishuSecretStore } from "./secret-store.mjs";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bridge-member-"));
 fs.mkdirSync(path.join(root, "storages"), { recursive: true });
@@ -11,7 +12,9 @@ fs.writeFileSync(path.join(root, "storages", "workspace.json"), JSON.stringify({
   tables: { workspaces: { workspace1: { title: "工作区", sessionIds: ["session1"] } } }
 }));
 const store = new FeishuBridgeStore(path.join(root, "bridge.sqlite"));
-await store.setBinding({ workspaceId: "default", appId: "cli_test", appSecret: "secret", grantOpenId: "ou_operator" });
+const secretStore = new FeishuSecretStore({ dshHome: root, platform: "linux" });
+secretStore.set("cli_test", "secret");
+await store.setBinding({ workspaceId: "default", appId: "cli_test", secretStored: true, grantOpenId: "ou_operator" });
 const requests = [];
 const fetchFn = async (url, options = {}) => {
   requests.push({ url, method: options.method || "GET", body: options.body || "" });
@@ -24,7 +27,7 @@ const fetchFn = async (url, options = {}) => {
         : { code: 0, data: {} };
   return { ok: true, status: 200, json: async () => data };
 };
-const bridge = new FeishuWorkspaceBridge({ store, dshHome: root, projectRoot: root, fetchFn });
+const bridge = new FeishuWorkspaceBridge({ store, dshHome: root, projectRoot: root, fetchFn, secretStore });
 
 try {
   const result = await bridge.syncWorkspace("workspace1");

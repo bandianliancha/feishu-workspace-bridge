@@ -62,7 +62,17 @@ export default function apply(ctx, config = {}) {
           const bindings = {};
           for (const item of workspaces) bindings[item.workspaceId] = publicBinding(await store.getBinding(item.workspaceId));
           const global = publicBinding(await store.getBinding("default"));
-          reply(200, { ok: true, workspaces, bindings, bot: { appId: global?.appId || process.env.FEISHU_APP_ID || "", grantOpenId: global?.grantOpenId || await bridge.grantOpenId(), configured: Boolean((await bridge.credentials()).appSecret) } });
+          reply(200, {
+            ok: true,
+            workspaces,
+            bindings,
+            bot: {
+              appId: global?.appId || process.env.FEISHU_APP_ID || "",
+              grantOpenId: global?.grantOpenId || await bridge.grantOpenId(),
+              configured: Boolean((await bridge.credentials()).appSecret)
+            },
+            diagnostics: await bridge.diagnostics()
+          });
           return;
         }
         if (req.method !== "POST") { reply(405, { ok: false, error: "method_not_allowed" }); return; }
@@ -79,6 +89,11 @@ export default function apply(ctx, config = {}) {
           reply(200, { ok: true, bot: result });
         } else if (body.action === "bindWorkspace") {
           reply(200, { ok: true, ...await bridge.syncWorkspace(body.workspaceId) });
+        } else if (body.action === "diagnose") {
+          reply(200, { ok: true, diagnostics: await bridge.diagnostics({ verify: true }) });
+        } else if (body.action === "retryFailed") {
+          await bridge.retryPendingDeliveries({ force: true });
+          reply(200, { ok: true, diagnostics: await bridge.diagnostics() });
         } else {
           reply(400, { ok: false, error: "unknown_action" });
         }
@@ -92,6 +107,7 @@ export default function apply(ctx, config = {}) {
   fs.watchFile(workspaceFile, { interval: 2000 }, () => bridge.syncChangedWorkspaces().catch((error) =>
     console.warn("[feishu-workspace-bridge] 工作区自动同步失败:", error.message)));
   bridge.startListening().catch((error) => console.warn("[feishu-workspace-bridge] 飞书长连接启动失败:", error.message));
+  bridge.startRetryLoop();
   bridge.syncChangedWorkspaces().catch((error) => console.warn("[feishu-workspace-bridge] 启动时工作区对账失败:", error.message));
 
   ctx.effect(() => () => {

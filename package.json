@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-feishu-workspace",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One private Feishu group per DSH workspace with real-time two-way message synchronization.",
   "type": "module",
   "main": "index.mjs",
@@ -14,6 +14,7 @@
     "index.mjs",
     "client.js",
     "store.mjs",
+    "secret-store.mjs",
     "tools.mjs",
     "bridge.mjs",
     "cordis.patch.yml",
@@ -63,7 +64,7 @@
   },
   "devDependencies": {},
   "scripts": {
-    "test": "node test-bind-bot.mjs && node test-lazy-sync.mjs && node test-session-forwarder.mjs && node test-workspace-member.mjs && node test-store-security.mjs",
+    "test": "node test-bind-bot.mjs && node test-lazy-sync.mjs && node test-session-forwarder.mjs && node test-workspace-member.mjs && node test-store-security.mjs && node test-secret-migration.mjs && node test-delivery-e2e.mjs",
     "check": "node --check index.mjs && node --check bridge.mjs && node --check store.mjs && node --check tools.mjs && npm test"
   },
   "engines": {
